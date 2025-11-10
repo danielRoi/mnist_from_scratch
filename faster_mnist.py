@@ -326,7 +326,7 @@ def main():
     
     # Load data with binarization
     X_train, y_train, X_test, y_test, y_test_labels = load_and_preprocess_mnist(
-        n_train=50000, 
+        n_train=5000, 
         n_test=10000,
         binarize=True,  # Convert to pure black/white
         threshold=0.5
@@ -338,7 +338,7 @@ def main():
     print("Activations: ReLU -> ReLU -> Softmax")
     
     nn = OptimizedNeuralNetwork(
-        layer_sizes=[784, 128, 64, 10],
+        layer_sizes=[784, 64, 64, 10],
         activations=['relu', 'relu', 'softmax']
     )
     

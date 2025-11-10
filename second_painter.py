@@ -372,15 +372,15 @@ def train_model():
     print("Architecture: 784 -> 128 -> 64 -> 10")
     
     nn = OptimizedNeuralNetwork(
-        layer_sizes=[784, 128, 64, 10],
-        activations=['relu', 'relu', 'relu']  # Use relu for output, apply softmax in prediction
+        layer_sizes=[784, 64, 64, 10],
+        activations=['relu', 'relu', 'softmax']  # Use relu for output, apply softmax in prediction
     )
     
     # Train
     print("\nTraining...")
     nn.train_batch(
         X_train, y_train,
-        epochs=15,
+        epochs=5,
         learning_rate=0.1,
         batch_size=32,
         X_val=X_test,

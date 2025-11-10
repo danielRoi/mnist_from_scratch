@@ -148,9 +148,14 @@ class NeuralNetwork:
         # Compute errors for output layer neurons
         output_error = []
         for i, neuron in enumerate(output_layer.neurons):
-            # (neuron.output - target) is gradient of MSE w.r.t. neuron's output
-            # multiply by derivative of activation (chain rule)
-            error = (neuron.output - targets[i]) * neuron.activate_derivative(neuron.z)
+            # Compute error term for the output neuron using the full derivative of MSE.
+            # MSE = (1/N) * Σ (y_hat - y)^2  →  dL/dy_hat = 2 * (y_hat - y) / N
+            # Here, N = number of outputs (e.g., 10 for MNIST classification).
+            # Reference:
+            # - https://en.wikipedia.org/wiki/Mean_squared_error
+            # - https://ml-cheatsheet.readthedocs.io/en/latest/loss_functions.html#mean-squared-error
+            N = len(targets)
+            error = (2 / N) * (neuron.output - targets[i]) * neuron.activate_derivative(neuron.z)
             output_error.append(error)
         errors[-1] = np.array(output_error)  # store array of errors for output layer
 
