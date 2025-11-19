@@ -1,324 +1,345 @@
 """
-MNIST Digit Classification using the OOP Neural Network
+MNIST Digit Classification - Refactored Version
 
-This file is a fully commented version of your original `mnist.py`.
-Each original code line has an explanatory comment added. Functions have longer explanations
-where the math/idea might be unfamiliar. Links to accessible, high-school-level resources
-are provided next to lines that benefit from external explanation (activation functions, one-hot,
-flattening images, gradient descent, etc.). Links chosen are simple and assume at most
-high-school algebra knowledge.
-
-Source (original file uploaded by you): see chat message reference. 
+Key improvements:
+1. Separated loss functions into a LossFunction class
+2. Fixed gradient accumulation for proper mini-batch training
+3. More modular code structure
+4. Added gradient clipping for numerical stability
 """
 
-import numpy as np  # import NumPy for numerical arrays and vectorized operations
-import matplotlib.pyplot as plt  # import matplotlib for plotting and saving images
-from tensorflow import keras  # import Keras (bundled in TensorFlow) to load MNIST dataset
-import time  # import time to measure training epoch durations
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow import keras
+import time
 
-# If you separated classes into another file, you would import them like this:
-# from neural_network import Neuron, Layer, NeuralNetwork
-# (left commented because the classes are included below for a self-contained example)
+
+class LossFunction:
+    """Container for different loss functions and their derivatives."""
+    
+    @staticmethod
+    def mse(predictions, targets):
+        """Mean Squared Error loss."""
+        return np.mean((predictions - targets) ** 2)
+    
+    @staticmethod
+    def mse_derivative(predictions, targets):
+        """Derivative of MSE: 2 * (predictions - targets) / n."""
+        n = len(targets)
+        return 2 * (predictions - targets) / n
+    
+    @staticmethod
+    def cross_entropy(predictions, targets):
+        predictions = np.clip(predictions, 1e-15, 1 - 1e-15)
+        return -np.mean(targets * np.log(predictions) + (1-targets) * np.log(1-predictions))
+
+    @staticmethod
+    def cross_entropy_derivative(predictions, targets):
+        """
+        Derivative of Binary Cross Entropy w.r.t. the predictions (a).
+        Formula: (a - y) / (a * (1 - a))
+        """
+        predictions = np.clip(predictions, 1e-15, 1 - 1e-15)
+        return (predictions - targets) / (predictions * (1 - predictions))
 
 
 class Neuron:
-    """Single neuron with weights, bias, and activation function.
-
-    Detailed explanation:
-    - A neuron computes z = w.x + b where w is weights vector, x is input vector, b is a scalar bias.
-    - The activation function (sigmoid/tanh/relu) then transforms z to produce the neuron's output.
-    - We keep `input`, `z`, and `output` stored on the object so the backward pass can use them.
-
-    Activation functions and their intuition (simple links):
-    - Sigmoid: maps numbers to (0,1). Good for probabilities. https://en.wikipedia.org/wiki/Sigmoid_function
-    - Tanh: maps to (-1,1). Centered around 0 which can speed learning a bit. https://en.wikipedia.org/wiki/Hyperbolic_function
-    - ReLU: returns 0 for negative inputs and identity for positives; simple and effective. https://en.wikipedia.org/wiki/Rectifier_(neural_networks)
-    """
+    """Single neuron with weights, bias, and activation function."""
 
     def __init__(self, n_inputs, activation='sigmoid'):
-        self.weights = np.random.randn(n_inputs) * 0.01  # small random initial weights (1D array)
-        self.bias = np.random.randn() * 0.01  # small random initial bias (scalar)
-        self.activation = activation  # activation function name stored as string
+        # Xavier/He initialization for better convergence
+        if activation == 'relu':
+            self.weights = np.random.randn(n_inputs) * np.sqrt(2.0 / n_inputs)
+        else:
+            self.weights = np.random.randn(n_inputs) * np.sqrt(1.0 / n_inputs)
+        self.bias = 0.0  # Initialize bias to zero
+        self.activation = activation
 
-        self.input = None  # placeholder to save last input seen by this neuron (used in backprop)
-        self.output = None  # placeholder to save last output of this neuron
-        self.z = None  # placeholder to save last linear combination (w.x + b)
+        # Forward pass cache
+        self.input = None
+        self.output = None
+        self.z = None
+        
+        # Gradient accumulation
+        self.weight_gradients = np.zeros_like(self.weights)
+        self.bias_gradient = 0.0
 
     def activate(self, z):
-        # Apply the chosen activation function to the pre-activation value z.
+        """Apply activation function."""
         if self.activation == 'sigmoid':
-            # Sigmoid: 1 / (1 + e^-z). We clip z to avoid overflow in exp for very large magnitudes.
-            return 1 / (1 + np.exp(-np.clip(z, -500, 500)))  # clipping is a numeric safety measure
+            return 1 / (1 + np.exp(-np.clip(z, -500, 500)))
         elif self.activation == 'tanh':
-            return np.tanh(z)  # hyperbolic tangent: outputs between -1 and 1
+            return np.tanh(z)
         elif self.activation == 'relu':
-            return np.maximum(0, z)  # ReLU: zero for negatives, identity for positives
+            return np.maximum(0, z)
         else:
-            return z  # linear activation: return z unchanged (useful for regression or output before softmax)
+            return z
 
     def activate_derivative(self, z):
-        # Return derivative of the activation function evaluated at z; used in backpropagation.
+        """Compute activation derivative."""
         if self.activation == 'sigmoid':
-            s = self.activate(z)  # sigmoid(z)
-            # derivative of sigmoid is s * (1 - s)
-            return s * (1 - s)  # efficient reuse of s
+            s = self.activate(z)
+            return s * (1 - s)
         elif self.activation == 'tanh':
-            # derivative of tanh is 1 - tanh(z)^2
             return 1 - np.tanh(z) ** 2
         elif self.activation == 'relu':
-            # derivative of ReLU is 1 where z>0 else 0. We cast to float for numeric operations.
             return (z > 0).astype(float)
         else:
-            return 1  # derivative of linear activation is 1
+            return 1
 
     def forward(self, inputs):
-        # Compute the neuron's forward pass for a single input vector.
-        self.input = inputs  # save input for gradient computation in backward pass
-        self.z = np.dot(self.weights, inputs) + self.bias  # linear combination w.x + b
-        self.output = self.activate(self.z)  # apply activation function
-        return self.output  # return scalar output for this neuron
+        """Forward pass computation."""
+        self.input = inputs
+        self.z = np.dot(self.weights, inputs) + self.bias
+        self.output = self.activate(self.z)
+        return self.output
+    
+    def zero_gradients(self):
+        """Reset accumulated gradients to zero."""
+        self.weight_gradients = np.zeros_like(self.weights)
+        self.bias_gradient = 0.0
+    
+    def update_weights(self, learning_rate):
+        """Apply accumulated gradients to update weights and bias."""
+        self.weights -= learning_rate * self.weight_gradients
+        self.bias -= learning_rate * self.bias_gradient
 
 
 class Layer:
-    """Layer of neurons: container that holds multiple Neuron objects and computes their outputs.
-
-    Notes:
-    - Each Layer is responsible for creating `n_neurons` Neuron objects.
-    - The `forward` method applies each neuron to the same input vector and returns a 1D numpy array
-      with the outputs of all neurons in this layer.
-    """
+    """Layer of neurons."""
 
     def __init__(self, n_inputs, n_neurons, activation='sigmoid'):
         self.neurons = [Neuron(n_inputs, activation) for _ in range(n_neurons)]
-        # create a list of Neuron objects; each neuron expects `n_inputs` features
-        self.n_neurons = n_neurons  # store number of neurons for convenience
-        self.output = None  # will hold the output array after forward pass
+        self.n_neurons = n_neurons
+        self.output = None
 
     def forward(self, inputs):
-        # Compute forward pass for the whole layer: gather outputs from each neuron
+        """Compute layer output."""
         self.output = np.array([neuron.forward(inputs) for neuron in self.neurons])
-        # The result is a 1D array of length `n_neurons` containing each neuron's output.
         return self.output
+    
+    def zero_gradients(self):
+        """Reset gradients for all neurons in layer."""
+        for neuron in self.neurons:
+            neuron.zero_gradients()
+    
+    def update_weights(self, learning_rate):
+        """Update weights for all neurons in layer."""
+        for neuron in self.neurons:
+            neuron.update_weights(learning_rate)
 
 
 class NeuralNetwork:
-    """Feedforward neural network built from Layer and Neuron objects.
+    """Feedforward neural network."""
 
-    Structure and usage:
-    - `layer_sizes` is a list like [784, 128, 64, 10] meaning input size 784, two hidden layers,
-      and output size 10.
-    - `activations` is a list of activation names for each hidden/output layer (length = n_layers).
-
-    Training internals provided here are simple and educational (not optimized like modern frameworks).
-    """
-
-    def __init__(self, layer_sizes, activations=None):
-        self.layer_sizes = layer_sizes  # keep the architecture sizes
-        self.n_layers = len(layer_sizes) - 1  # number of layers with parameters (excluding input layer)
-
+    def __init__(self, layer_sizes, activations=None, loss_function='mse'):
+        self.layer_sizes = layer_sizes
+        self.n_layers = len(layer_sizes) - 1
+        
         if activations is None:
-            activations = ['sigmoid'] * self.n_layers  # default: sigmoid for every layer
-
-        self.layers = []  # list to hold constructed Layer objects
+            activations = ['sigmoid'] * self.n_layers
+        
+        self.layers = []
         for i in range(self.n_layers):
             layer = Layer(layer_sizes[i], layer_sizes[i+1], activations[i])
-            # create each layer using size of previous layer as n_inputs
             self.layers.append(layer)
-
-        # track training metrics for plotting later
+        
+        # Set loss function
+        self.loss_function_name = loss_function
+        if loss_function == 'mse':
+            self.loss_fn = LossFunction.mse
+            self.loss_derivative = LossFunction.mse_derivative
+        elif loss_function == 'cross_entropy':
+            self.loss_fn = LossFunction.cross_entropy
+            self.loss_derivative = LossFunction.cross_entropy_derivative
+        else:
+            raise ValueError(f"Unknown loss function: {loss_function}")
+        
+        # Training metrics
         self.training_loss = []
         self.training_accuracy = []
 
     def forward(self, inputs):
-        # Compute the network's forward pass through all layers.
-        output = inputs  # start with raw input vector
+        """Forward pass through network."""
+        output = inputs
         for layer in self.layers:
-            output = layer.forward(output)  # feed output of previous layer into next
-        return output  # final output is e.g., a length-10 vector for MNIST
+            output = layer.forward(output)
+        return output
 
-    def backward(self, inputs, targets, learning_rate=0.1):
-        # Single-sample backward pass using mean-squared error derivative.
-        # NOTE: This is a pedagogical implementation of backprop and uses element-wise formulas.
+    def compute_loss(self, predictions, targets):
+        """Compute loss using configured loss function."""
+        return self.loss_fn(predictions, targets)
 
-        self.forward(inputs)  # run forward to ensure .output, .z saved on neurons
-
-        output_layer = self.layers[-1]  # reference to last layer (output layer)
-        errors = [None] * self.n_layers  # placeholder for error signals per layer
-
-        # Compute errors for output layer neurons
+    def backward_single(self, inputs, targets):
+        """
+        Backward pass for a single sample.
+        Accumulates gradients but does NOT update weights.
+        """
+        # Ensure forward pass is done
+        output = self.forward(inputs)
+        
+        # Compute output layer error using loss derivative
+        output_layer = self.layers[-1]
+        errors = [None] * self.n_layers
+        
         output_error = []
+        loss_grad = self.loss_derivative(output, targets)
+        
         for i, neuron in enumerate(output_layer.neurons):
-            # Compute error term for the output neuron using the full derivative of MSE.
-            # MSE = (1/N) * Σ (y_hat - y)^2  →  dL/dy_hat = 2 * (y_hat - y) / N
-            # Here, N = number of outputs (e.g., 10 for MNIST classification).
-            # Reference:
-            # - https://en.wikipedia.org/wiki/Mean_squared_error
-            # - https://ml-cheatsheet.readthedocs.io/en/latest/loss_functions.html#mean-squared-error
-            N = len(targets)
-            error = (2 / N) * (neuron.output - targets[i]) * neuron.activate_derivative(neuron.z)
+            error = loss_grad[i] * neuron.activate_derivative(neuron.z)
             output_error.append(error)
-        errors[-1] = np.array(output_error)  # store array of errors for output layer
-
-        # Backpropagate errors to earlier layers
+        errors[-1] = np.array(output_error)
+        
+        # Backpropagate errors
         for l in range(self.n_layers - 2, -1, -1):
-            # iterate layers from second-last down to first parameterized layer
             layer_error = []
             for i, neuron in enumerate(self.layers[l].neurons):
-                # compute error contribution to neuron i in layer l from all neurons in l+1
                 error = 0
                 for j, next_neuron in enumerate(self.layers[l+1].neurons):
-                    # next_neuron.weights[i] is weight connecting neuron i (current layer) to neuron j (next layer)
                     error += errors[l+1][j] * next_neuron.weights[i]
-                # multiply aggregated error by derivative of activation at neuron's z
                 error *= neuron.activate_derivative(neuron.z)
                 layer_error.append(error)
-            errors[l] = np.array(layer_error)  # store error vector for layer l
-
-        # Update weights and biases using the computed errors and the saved inputs/outputs
+            errors[l] = np.array(layer_error)
+        
+        # Accumulate gradients (don't update yet)
         for l, layer in enumerate(self.layers):
-            # Determine input to this layer: the raw network inputs for the first layer,
-            # otherwise the output of previous layer.
             layer_input = inputs if l == 0 else self.layers[l-1].output
             for i, neuron in enumerate(layer.neurons):
-                # Gradient for weights: error * input (note inputs is a vector)
-                # Here we rely on numpy broadcasting: neuron.weights and layer_input have same length
-                neuron.weights -= learning_rate * errors[l][i] * layer_input
-                # Bias gradient is just the error term (since d/d b of (w.x + b) is 1)
-                neuron.bias -= learning_rate * errors[l][i]
+                neuron.weight_gradients += errors[l][i] * layer_input
+                neuron.bias_gradient += errors[l][i]
+        
+        return output
 
-    def train_batch(self, X, y, epochs=10, learning_rate=0.1, batch_size=32, 
+    def zero_gradients(self):
+        """Reset all accumulated gradients to zero."""
+        for layer in self.layers:
+            layer.zero_gradients()
+
+    def update_weights(self, learning_rate, batch_size):
+        """Update all weights using accumulated gradients divided by batch size."""
+        for layer in self.layers:
+            for neuron in layer.neurons:
+                # Average gradients over batch
+                neuron.weight_gradients /= batch_size
+                neuron.bias_gradient /= batch_size
+                
+                # Optional: gradient clipping
+                neuron.weight_gradients = np.clip(neuron.weight_gradients, -5, 5)
+                neuron.bias_gradient = np.clip(neuron.bias_gradient, -5, 5)
+                
+            layer.update_weights(learning_rate)
+
+    def train_batch(self, X, y, epochs=10, learning_rate=0.1, batch_size=32,
                    X_val=None, y_val=None, verbose=True):
-        """Train with mini-batch gradient descent.
-
-        Explanation and notes:
-        - This method implements basic mini-batch gradient descent: the dataset is shuffled and
-          processed in chunks (batches). Inside each batch it performs a full backward pass for each sample.
-        - This is NOT vectorized for speed; it's written for clarity and teaching.
-        - For larger datasets, frameworks use vectorized operations and compute gradient averages per batch.
-
-        Helpful link about mini-batch gradient descent (simple):
-        https://ml-cheatsheet.readthedocs.io/en/latest/gradient_descent.html
-        """
-        n_samples = len(X)  # number of training examples
+        """Train with proper mini-batch gradient descent."""
+        n_samples = len(X)
 
         for epoch in range(epochs):
-            start_time = time.time()  # time epoch duration
+            start_time = time.time()
 
-            # Shuffle data each epoch to reduce bias and improve convergence
+            # Shuffle data
             indices = np.random.permutation(n_samples)
             X_shuffled = X[indices]
             y_shuffled = y[indices]
 
-            total_loss = 0  # accumulate loss across all samples to compute average later
-            correct = 0  # count correct predictions for accuracy
+            epoch_loss = 0
+            correct = 0
 
-            # Mini-batch training loop
+            # Process mini-batches
             for i in range(0, n_samples, batch_size):
-                batch_X = X_shuffled[i:i+batch_size]  # slice a batch of inputs
-                batch_y = y_shuffled[i:i+batch_size]  # corresponding batch of labels
-
-                for j in range(len(batch_X)):
-                    # Update network parameters using one sample from the batch
-                    self.backward(batch_X[j], batch_y[j], learning_rate)
-
-                    # After update, compute output to evaluate loss and accuracy tracking
-                    output = self.forward(batch_X[j])
-                    loss = np.mean((output - batch_y[j]) ** 2)  # mean squared error of this sample
-                    total_loss += loss  # add to running total loss
-
-                    # If the index with max output equals index with max target, it's a correct classification
+                batch_X = X_shuffled[i:i+batch_size]
+                batch_y = y_shuffled[i:i+batch_size]
+                actual_batch_size = len(batch_X)
+                
+                # Zero gradients before batch
+                self.zero_gradients()
+                
+                # Accumulate gradients over batch
+                batch_loss = 0
+                for j in range(actual_batch_size):
+                    output = self.backward_single(batch_X[j], batch_y[j])
+                    
+                    # Track loss and accuracy
+                    loss = self.compute_loss(output, batch_y[j])
+                    batch_loss += loss
+                    
                     if np.argmax(output) == np.argmax(batch_y[j]):
                         correct += 1
+                
+                # Update weights once per batch
+                self.update_weights(learning_rate, actual_batch_size)
+                epoch_loss += batch_loss
 
-            avg_loss = total_loss / n_samples  # average loss per sample in epoch
-            train_acc = correct / n_samples * 100  # training accuracy as percentage
+            # Calculate metrics
+            avg_loss = epoch_loss / n_samples
+            train_acc = correct / n_samples * 100
 
-            # Save metrics for plotting later
             self.training_loss.append(avg_loss)
             self.training_accuracy.append(train_acc)
 
-            # Validation accuracy if validation set provided
-            val_acc = 0
+            # Validation
+            val_acc = None
             if X_val is not None and y_val is not None:
                 val_acc = self.evaluate(X_val, y_val)
 
-            epoch_time = time.time() - start_time  # time taken for epoch
+            epoch_time = time.time() - start_time
 
             if verbose:
-                if X_val is not None:
-                    # print training progress with validation accuracy included
+                if val_acc is not None:
                     print(f"Epoch {epoch+1:2d}/{epochs} | "
                           f"Loss: {avg_loss:.4f} | "
                           f"Train Acc: {train_acc:.2f}% | "
                           f"Val Acc: {val_acc:.2f}% | "
                           f"Time: {epoch_time:.1f}s")
                 else:
-                    # print training progress without validation accuracy
                     print(f"Epoch {epoch+1:2d}/{epochs} | "
                           f"Loss: {avg_loss:.4f} | "
                           f"Train Acc: {train_acc:.2f}% | "
                           f"Time: {epoch_time:.1f}s")
 
     def predict(self, X):
-        # Run forward pass for each input sample and collect raw outputs
+        """Generate predictions for dataset."""
         predictions = []
         for inputs in X:
             output = self.forward(inputs)
             predictions.append(output)
-        return np.array(predictions)  # return 2D array shape (n_samples, n_outputs)
+        return np.array(predictions)
 
     def evaluate(self, X, y):
-        """Evaluate accuracy on dataset.
-
-        This uses predict() and a simple argmax comparison to compute percentage correct.
-        """
+        """Evaluate accuracy on dataset."""
         correct = 0
-        predictions = self.predict(X)  # raw network outputs for each sample
+        predictions = self.predict(X)
 
         for i in range(len(X)):
             if np.argmax(predictions[i]) == np.argmax(y[i]):
                 correct += 1
 
-        return correct / len(X) * 100  # percent accuracy
+        return correct / len(X) * 100
 
 
 def load_and_preprocess_mnist(n_train=5000, n_test=1000):
-    """Load and preprocess MNIST dataset.
-
-    Steps performed:
-    1. Load using Keras helper (downloads dataset the first time).
-    2. Optionally subset to `n_train` / `n_test` for faster experiments.
-    3. Flatten 28x28 images to 1D arrays of length 784. Explanation: neural nets here expect vectors.
-       Simple link explaining flattening/why: https://www.khanacademy.org/math/precalculus
-       (flattening is simply listing pixels row-by-row into one long vector; no advanced math needed).
-    4. Normalize pixel values from [0,255] to [0,1] for numerical stability.
-    5. One-hot encode labels: transform a scalar label like 3 into a vector with a 1 at index 3.
-       Simple one-hot explanation: https://machinelearningmastery.com/why-one-hot-encode-data-in-machine-learning/
-    """
-    print("Loading MNIST dataset...")  # notify user about dataset download/load
+    """Load and preprocess MNIST dataset."""
+    print("Loading MNIST dataset...")
     (X_train_full, y_train_full), (X_test_full, y_test_full) = keras.datasets.mnist.load_data()
-    # keras.datasets.mnist comes with 60k training and 10k test images by default
 
-    # Use subset for faster training (user-specified sizes)
     X_train = X_train_full[:n_train]
     y_train = y_train_full[:n_train]
     X_test = X_test_full[:n_test]
     y_test = y_test_full[:n_test]
 
-    # Flatten images: 28x28 -> 784 (row-major order). This converts 2D images into 1D feature vectors.
+    # Flatten images
     X_train = X_train.reshape(X_train.shape[0], -1)
     X_test = X_test.reshape(X_test.shape[0], -1)
 
-    # Normalize: convert integers 0-255 to floats 0.0-1.0 to help optimization convergence
+    # Normalize
     X_train = X_train.astype('float32') / 255.0
     X_test = X_test.astype('float32') / 255.0
 
-    # One-hot encode labels into vectors of length 10 (for digits 0-9)
+    # One-hot encode
     y_train_onehot = np.zeros((len(y_train), 10))
     y_test_onehot = np.zeros((len(y_test), 10))
 
     for i in range(len(y_train)):
-        # set the column corresponding to the digit label to 1
         y_train_onehot[i, y_train[i]] = 1
 
     for i in range(len(y_test)):
@@ -326,67 +347,48 @@ def load_and_preprocess_mnist(n_train=5000, n_test=1000):
 
     print(f"Training set: {X_train.shape[0]} samples")
     print(f"Test set: {X_test.shape[0]} samples")
-    print(f"Image size: {X_train.shape[1]} pixels (28x28 flattened)")
+    print(f"Image size: {X_train.shape[1]} pixels")
 
-    # return processed arrays plus original scalar test labels for display convenience
     return X_train, y_train_onehot, X_test, y_test_onehot, y_test
 
 
 def visualize_predictions(nn, X_test, y_test_labels, n_samples=20):
-    """Visualize some predictions and save a PNG.
+    """Visualize predictions."""
+    fig, axes = plt.subplots(4, 5, figsize=(12, 10))
+    axes = axes.ravel()
 
-    - Selects `n_samples` random examples from X_test.
-    - Plots the image, predicted label, true label, and the model's confidence.
-    - Confidence here is the raw output for the predicted class (not a calibrated probability).
-
-    Note on confidence: this network outputs values that are not passed through a softmax,
-    so treating the highest output as a probability is only an approximation. For proper
-    calibrated probabilities, apply a softmax to the final outputs. Simple softmax intro:
-    https://www.khanacademy.org/math/statistics-probability/probability-library
-    (softmax is a way to convert raw scores into positive numbers that sum to 1).
-    """
-    fig, axes = plt.subplots(4, 5, figsize=(12, 10))  # create a grid of subplots 4x5
-    axes = axes.ravel()  # flatten axes array to iterate easily
-
-    indices = np.random.choice(len(X_test), n_samples, replace=False)  # sample unique indices
+    indices = np.random.choice(len(X_test), n_samples, replace=False)
 
     for i, idx in enumerate(indices):
-        # Reshape flattened vector back to 28x28 for display as image
         img = X_test[idx].reshape(28, 28)
-
-        # Get prediction vector and derive predicted label
         output = nn.forward(X_test[idx])
-        pred_label = np.argmax(output)  # index of maximum output component
-        true_label = y_test_labels[idx]  # true scalar label from original dataset
-        confidence = output[pred_label] * 100  # naive 'confidence' as percentage of raw output
+        pred_label = np.argmax(output)
+        true_label = y_test_labels[idx]
+        confidence = output[pred_label] * 100
 
-        # Plot image
         axes[i].imshow(img, cmap='gray')
-        axes[i].axis('off')  # hide axis ticks
+        axes[i].axis('off')
 
-        # color title green for correct, red for incorrect
         color = 'green' if pred_label == true_label else 'red'
-        axes[i].set_title(f'True: {true_label}\nPred: {pred_label} ({confidence:.1f}%)', 
+        axes[i].set_title(f'True: {true_label}\nPred: {pred_label} ({confidence:.1f}%)',
                          color=color, fontsize=10)
 
     plt.tight_layout()
-    plt.savefig('mnist_predictions.png', dpi=150, bbox_inches='tight')  # save the figure to file
+    plt.savefig('mnist_predictions.png', dpi=150, bbox_inches='tight')
     print("\nPredictions saved to 'mnist_predictions.png'")
-    plt.show()  # display the figure in an interactive environment
+    plt.show()
 
 
 def plot_training_history(nn):
-    """Plot training loss and accuracy saved during train_batch."""
+    """Plot training history."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-    # Loss plot
     axes[0].plot(nn.training_loss)
     axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss (MSE)')
+    axes[0].set_ylabel(f'Loss ({nn.loss_function_name.upper()})')
     axes[0].set_title('Training Loss')
-    axes[0].grid(True, alpha=0.3)  # add light grid to make trends easier to read
+    axes[0].grid(True, alpha=0.3)
 
-    # Accuracy plot
     axes[1].plot(nn.training_accuracy)
     axes[1].set_xlabel('Epoch')
     axes[1].set_ylabel('Accuracy (%)')
@@ -400,38 +402,31 @@ def plot_training_history(nn):
 
 
 def main():
-    """Main function to run MNIST classification end-to-end.
-
-    Steps:
-    1. Load and preprocess data
-    2. Create network architecture
-    3. Train with train_batch
-    4. Evaluate and show per-class accuracy
-    5. Plot and save visualizations
-    """
+    """Main function."""
     print("=" * 70)
-    print("MNIST Digit Classification with OOP Neural Network")
+    print("MNIST Digit Classification - Refactored")
     print("=" * 70)
 
-    # Load data (subsampled for speed by default)
+    # Load data
     X_train, y_train, X_test, y_test, y_test_labels = load_and_preprocess_mnist(
         n_train=5000, n_test=1000
     )
 
-    # Create neural network: 784 -> 128 -> 64 -> 10
+    # Create network
     print("\nCreating Neural Network...")
-    print("Architecture: 784 (input) -> 128 (hidden) -> 64 (hidden) -> 10 (output)")
+    print("Architecture: 784 -> 128 -> 64 -> 10")
 
     nn = NeuralNetwork(
         layer_sizes=[784, 128, 64, 10],
-        activations=['relu', 'relu', 'sigmoid']
+        activations=['relu', 'relu', 'sigmoid'],
+        loss_function='cross_entropy'  # Can change to 'cross_entropy'
     )
 
-    # Count total parameters: for each neuron count its weights + bias
     total_params = sum(len(n.weights) + 1 for l in nn.layers for n in l.neurons)
     print(f"Total parameters: {total_params:,}")
+    print(f"Loss function: {nn.loss_function_name.upper()}")
 
-    # Train the network with specified hyperparameters
+    # Train
     print("\n" + "=" * 70)
     print("Training Network...")
     print("=" * 70)
@@ -446,7 +441,7 @@ def main():
         verbose=True
     )
 
-    # Final evaluation on training and test sets
+    # Evaluate
     print("\n" + "=" * 70)
     print("Final Evaluation")
     print("=" * 70)
@@ -457,7 +452,7 @@ def main():
     print(f"Final Training Accuracy: {train_acc:.2f}%")
     print(f"Final Test Accuracy: {test_acc:.2f}%")
 
-    # Per-class accuracy breakdown
+    # Per-class accuracy
     print("\n" + "=" * 70)
     print("Per-Class Accuracy")
     print("=" * 70)
@@ -466,8 +461,8 @@ def main():
     pred_labels = np.argmax(predictions, axis=1)
 
     for digit in range(10):
-        digit_mask = y_test_labels == digit  # mask for samples of this digit
-        digit_acc = np.mean(pred_labels[digit_mask] == digit) * 100  # percent correct for this digit
+        digit_mask = y_test_labels == digit
+        digit_acc = np.mean(pred_labels[digit_mask] == digit) * 100
         digit_count = np.sum(digit_mask)
         print(f"Digit {digit}: {digit_acc:.2f}% ({digit_count} samples)")
 
@@ -476,11 +471,11 @@ def main():
     print("Generating Visualizations...")
     print("=" * 70)
 
-    plot_training_history(nn)  # loss and accuracy plots
-    visualize_predictions(nn, X_test, y_test_labels)  # sample image predictions
+    plot_training_history(nn)
+    visualize_predictions(nn, X_test, y_test_labels)
 
     print("\n" + "=" * 70)
-    print("MNIST Classification Complete!")
+    print("Complete!")
     print("=" * 70)
 
 
