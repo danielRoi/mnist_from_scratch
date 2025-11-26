@@ -16,8 +16,13 @@ class Neuron:
     """
 
     def __init__(self, n_inputs, activation='sigmoid'):
-        self.weights = np.random.randn(n_inputs) * 0.01  # small random initial weights (1D array)
-        self.bias = np.random.randn() * 0.01  # small random initial bias (scalar)
+        # Xavier/He initialization for better convergence
+        if activation == 'relu':
+            self.weights = np.random.randn(n_inputs) * np.sqrt(2.0 / n_inputs)
+        else:
+            self.weights = np.random.randn(n_inputs) * np.sqrt(1.0 / n_inputs)
+
+        self.bias = 0
         self.activation = activation  # activation function name stored as string
 
         self.input = None  # placeholder to save last input seen by this neuron (used in backprop)

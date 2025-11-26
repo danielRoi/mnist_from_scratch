@@ -113,7 +113,7 @@ def main():
 
     nn.train(
         X_train, y_train,
-        epochs=5,
+        epochs=15,
         learning_rate=0.05,
         batch_size=32,
         X_val=X_test,
