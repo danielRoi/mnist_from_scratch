@@ -94,7 +94,7 @@ def main():
     print("=" * 70)
 
     X_train, y_train, X_test, y_test, y_test_labels = load_and_preprocess_mnist(
-        n_train=5000, n_test=1000
+        n_train=50000, n_test=10000
     )
 
     print("\nCreating Neural Network...")
@@ -104,7 +104,7 @@ def main():
         activations=['relu', 'relu', 'softmax']
     )
 
-    total_params = sum(len(n.weights) + 1 for l in nn.layers for n in l.neurons)
+    total_params = sum(l.weights.size + l.bias.size for l in nn.layers)
     print(f"Total parameters: {total_params:,}")
 
     print("\n" + "=" * 70)
