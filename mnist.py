@@ -46,7 +46,8 @@ def visualize_predictions(nn, X_test, y_test_labels, n_samples=20):
     for i, idx in enumerate(indices):
         img = X_test[idx].reshape(28, 28)
 
-        output = nn.forward(X_test[idx])
+        # FIXED: Use predict() which handles single samples correctly
+        output = nn.predict(X_test[idx])  # Now returns 1D array: shape (10,)
         pred_label = np.argmax(output)
         true_label = y_test_labels[idx]
         
@@ -63,7 +64,6 @@ def visualize_predictions(nn, X_test, y_test_labels, n_samples=20):
     plt.savefig('mnist_predictions.png', dpi=150, bbox_inches='tight')
     print("\nPredictions saved to 'mnist_predictions.png'")
     plt.show()
-
 
 def plot_training_history(nn):
     """Plot training loss and accuracy."""
@@ -113,7 +113,7 @@ def main():
 
     nn.train(
         X_train, y_train,
-        epochs=15,
+        epochs=5,
         learning_rate=0.05,
         batch_size=32,
         X_val=X_test,
