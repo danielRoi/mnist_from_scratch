@@ -113,17 +113,24 @@ def main():
 
     nn.train(
         X_train, y_train,
-        epochs=5,
+        epochs=10,
         learning_rate=0.05,
         batch_size=32,
         X_val=X_test,
         y_val=y_test,
         verbose=True
     )
-
     print("\n" + "=" * 70)
     print("Final Evaluation")
     print("=" * 70)
+
+    train_acc = nn.evaluate(X_train, y_train)
+    test_acc = nn.evaluate(X_test, y_test)
+
+    print(f"Final Training Accuracy: {train_acc:.2f}%")
+    print(f"Final Test Accuracy: {test_acc:.2f}%")
+    nn.save('mnist_model.npz')
+    nn = NeuralNetwork.load_model('mnist_model.npz')
 
     train_acc = nn.evaluate(X_train, y_train)
     test_acc = nn.evaluate(X_test, y_test)

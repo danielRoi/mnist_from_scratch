@@ -203,11 +203,79 @@ class NeuralNetwork:
         return np.vstack(predictions)
 
     def evaluate(self, X, y, batch_size=1000):
+            """
+            Vectorized evaluation - much faster than looping.
+            """
+            predictions = self.predict(X, batch_size=batch_size)
+            pred_classes = np.argmax(predictions, axis=1)
+            true_classes = np.argmax(y, axis=1)
+            accuracy = np.mean(pred_classes == true_classes) * 100
+            return accuracy
+
+    def save(self, filepath):
         """
-        Vectorized evaluation - much faster than looping.
+        Save complete model state to a .npz file (fast, compressed).
+        Preserves all weights, biases, architecture, and training history.
         """
-        predictions = self.predict(X, batch_size=batch_size)
-        pred_classes = np.argmax(predictions, axis=1)
-        true_classes = np.argmax(y, axis=1)
-        accuracy = np.mean(pred_classes == true_classes) * 100
-        return accuracy
+        save_dict = {
+            'layer_sizes': self.layer_sizes,
+            'training_loss': self.training_loss,
+            'training_accuracy': self.training_accuracy,
+        }
+        
+        # Save each layer's weights, biases, and activation
+        for i, layer in enumerate(self.layers):
+            save_dict[f'layer_{i}_weights'] = layer.weights
+            save_dict[f'layer_{i}_bias'] = layer.bias
+            save_dict[f'layer_{i}_activation'] = layer.activation
+        
+        np.savez_compressed(filepath, **save_dict)
+
+    def load(self, filepath):
+        """
+        Load complete model state from a .npz file.
+        Restores exact model state - can continue training seamlessly.
+        """
+        data = np.load(filepath, allow_pickle=True)
+        
+        # Restore architecture
+        self.layer_sizes = data['layer_sizes'].tolist()
+        self.n_layers = len(self.layer_sizes) - 1
+        self.training_loss = data['training_loss'].tolist()
+        self.training_accuracy = data['training_accuracy'].tolist()
+        
+        # Restore layers
+        self.layers = []
+        for i in range(self.n_layers):
+            activation = str(data[f'layer_{i}_activation'])
+            layer = Layer(self.layer_sizes[i], self.layer_sizes[i+1], activation)
+            layer.weights = data[f'layer_{i}_weights']
+            layer.bias = data[f'layer_{i}_bias']
+            self.layers.append(layer)
+
+    @staticmethod
+    def load_model(filepath):
+        """
+        Static method to load a model without needing to create an instance first.
+        Returns a fully restored NeuralNetwork ready to use.
+        
+        Usage: nn = NeuralNetwork.load_model('my_model.npz')
+        """
+        data = np.load(filepath, allow_pickle=True)
+        layer_sizes = data['layer_sizes'].tolist()
+        
+        # Create new instance with loaded architecture
+        nn = NeuralNetwork(layer_sizes)
+        
+        # Restore training history
+        nn.training_loss = data['training_loss'].tolist()
+        nn.training_accuracy = data['training_accuracy'].tolist()
+        
+        # Restore layers
+        for i in range(nn.n_layers):
+            activation = str(data[f'layer_{i}_activation'])
+            nn.layers[i].activation = activation
+            nn.layers[i].weights = data[f'layer_{i}_weights']
+            nn.layers[i].bias = data[f'layer_{i}_bias']
+        
+        return nn
