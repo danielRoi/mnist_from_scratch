@@ -22,6 +22,22 @@ class Optimizer:
         self.t = state.get('t', 0)
         self.learning_rate = state.get('learning_rate', self.learning_rate)
 
+
+class SGD(Optimizer):
+    """
+    Basic Stochastic Gradient Descent.
+    Used when optimizer is set to None.
+    """
+    def update(self, layers, gradients):
+        self.t += 1
+        for i, layer in enumerate(layers):
+            w_grad, b_grad = gradients[i]
+            
+            # Standard Gradient Descent update: param = param - learning_rate * gradient
+            layer.weights -= self.learning_rate * w_grad
+            layer.bias -= self.learning_rate * b_grad
+
+
 class AdamW(Optimizer):
     """AdamW optimizer with decoupled weight decay."""
     
@@ -155,9 +171,14 @@ class NeuralNetwork:
         self.training_accuracy = []
         
         # Initialize optimizer
-        self.optimizer_name = optimizer.lower()
+        # Handle None or 'none' as basic SGD
+        self.optimizer_name = str(optimizer).lower() if optimizer is not None else 'none'
+        
         if self.optimizer_name == 'adamw':
             self.optimizer = AdamW(learning_rate=learning_rate, **optimizer_kwargs)
+        elif self.optimizer_name == 'none' or self.optimizer_name == 'sgd':
+            # Fallback to basic Gradient Descent
+            self.optimizer = SGD(learning_rate=learning_rate)
         else:
             raise ValueError(f"Unknown optimizer: {optimizer}.")
 
@@ -360,6 +381,8 @@ class NeuralNetwork:
             # Recreate optimizer with saved state
             if self.optimizer_name == 'adamw':
                 self.optimizer = AdamW()
+            elif self.optimizer_name == 'none' or self.optimizer_name == 'sgd':
+                self.optimizer = SGD()
             
             self.optimizer.set_state(optimizer_state)
 
@@ -374,8 +397,8 @@ class NeuralNetwork:
         data = np.load(filepath, allow_pickle=True)
         layer_sizes = data['layer_sizes'].tolist()
         
-        # Determine optimizer from saved state
-        optimizer_name = str(data.get('optimizer_name', 'adam'))
+        # Determine optimizer from saved state (default to 'adamw' if missing for backward compatibility)
+        optimizer_name = str(data.get('optimizer_name', 'adamw'))
         
         # Create new instance with loaded architecture
         nn = NeuralNetwork(layer_sizes, optimizer=optimizer_name)

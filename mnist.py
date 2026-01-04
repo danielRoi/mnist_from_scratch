@@ -102,9 +102,9 @@ def main():
     nn = NeuralNetwork(
         layer_sizes=[784, 128, 64, 10],
         activations=['relu', 'relu', 'softmax'], 
-        optimizer='adamW',
-        learning_rate=0.001, 
-        weight_decay=0.01
+        optimizer='none',
+        learning_rate=0.05, 
+        #weight_decay=0.01
     )
 
     total_params = sum(l.weights.size + l.bias.size for l in nn.layers)
@@ -116,7 +116,7 @@ def main():
 
     nn.train(
         X_train, y_train,
-        epochs=10,
+        epochs=15,
         batch_size=128,
         X_val=X_test,
         y_val=y_test,
