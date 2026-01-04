@@ -1,6 +1,99 @@
 import numpy as np 
 import time
 
+
+class Optimizer:
+    """Base optimizer class."""
+    
+    def __init__(self, learning_rate=0.001):
+        self.learning_rate = learning_rate
+        self.t = 0  # Time step for optimizers that need it
+    
+    def update(self, layers, gradients):
+        """Update layer parameters given gradients."""
+        raise NotImplementedError
+    
+    def get_state(self):
+        """Get optimizer state for saving."""
+        return {'t': self.t, 'learning_rate': self.learning_rate}
+    
+    def set_state(self, state):
+        """Set optimizer state for loading."""
+        self.t = state.get('t', 0)
+        self.learning_rate = state.get('learning_rate', self.learning_rate)
+
+class AdamW(Optimizer):
+    """AdamW optimizer with decoupled weight decay."""
+    
+    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.01):
+        super().__init__(learning_rate)
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.epsilon = epsilon
+        self.weight_decay = weight_decay
+        self.m = []  # First moment (mean)
+        self.v = []  # Second moment (variance)
+    
+    def update(self, layers, gradients):
+        # Initialize moments on first call
+        if len(self.m) == 0:
+            for layer in layers:
+                self.m.append({
+                    'w': np.zeros_like(layer.weights),
+                    'b': np.zeros_like(layer.bias)
+                })
+                self.v.append({
+                    'w': np.zeros_like(layer.weights),
+                    'b': np.zeros_like(layer.bias)
+                })
+        
+        self.t += 1
+        
+        for i, layer in enumerate(layers):
+            w_grad, b_grad = gradients[i]
+            
+            # Update biased first moment estimate
+            self.m[i]['w'] = self.beta1 * self.m[i]['w'] + (1 - self.beta1) * w_grad
+            self.m[i]['b'] = self.beta1 * self.m[i]['b'] + (1 - self.beta1) * b_grad
+            
+            # Update biased second moment estimate
+            self.v[i]['w'] = self.beta2 * self.v[i]['w'] + (1 - self.beta2) * w_grad**2
+            self.v[i]['b'] = self.beta2 * self.v[i]['b'] + (1 - self.beta2) * b_grad**2
+            
+            # Compute bias-corrected moments
+            m_hat_w = self.m[i]['w'] / (1 - self.beta1**self.t)
+            m_hat_b = self.m[i]['b'] / (1 - self.beta1**self.t)
+            v_hat_w = self.v[i]['w'] / (1 - self.beta2**self.t)
+            v_hat_b = self.v[i]['b'] / (1 - self.beta2**self.t)
+            
+            # Update parameters with decoupled weight decay
+            # Key difference from Adam: weight decay is applied directly to weights
+            layer.weights = layer.weights * (1 - self.learning_rate * self.weight_decay) - \
+                           self.learning_rate * m_hat_w / (np.sqrt(v_hat_w) + self.epsilon)
+            layer.bias -= self.learning_rate * m_hat_b / (np.sqrt(v_hat_b) + self.epsilon)
+    
+    def get_state(self):
+        state = super().get_state()
+        state.update({
+            'beta1': self.beta1,
+            'beta2': self.beta2,
+            'epsilon': self.epsilon,
+            'weight_decay': self.weight_decay,
+            'm': self.m,
+            'v': self.v
+        })
+        return state
+    
+    def set_state(self, state):
+        super().set_state(state)
+        self.beta1 = state.get('beta1', self.beta1)
+        self.beta2 = state.get('beta2', self.beta2)
+        self.epsilon = state.get('epsilon', self.epsilon)
+        self.weight_decay = state.get('weight_decay', self.weight_decay)
+        self.m = state.get('m', [])
+        self.v = state.get('v', [])
+
+
 class Layer:
     """Fully vectorized layer that processes batches efficiently."""
 
@@ -46,7 +139,7 @@ class Layer:
 class NeuralNetwork:
     """Ultra-fast vectorized neural network with batch processing."""
 
-    def __init__(self, layer_sizes, activations=None):
+    def __init__(self, layer_sizes, activations=None, optimizer='adam', learning_rate=0.001, **optimizer_kwargs):
         self.layer_sizes = layer_sizes
         self.n_layers = len(layer_sizes) - 1
 
@@ -60,6 +153,13 @@ class NeuralNetwork:
 
         self.training_loss = []
         self.training_accuracy = []
+        
+        # Initialize optimizer
+        self.optimizer_name = optimizer.lower()
+        if self.optimizer_name == 'adamw':
+            self.optimizer = AdamW(learning_rate=learning_rate, **optimizer_kwargs)
+        else:
+            raise ValueError(f"Unknown optimizer: {optimizer}.")
 
     def forward(self, inputs):
         """
@@ -120,7 +220,7 @@ class NeuralNetwork:
         
         return gradients
 
-    def train(self, X, y, epochs=10, learning_rate=0.1, batch_size=32, X_val=None, y_val=None, verbose=True):
+    def train(self, X, y, epochs=10, batch_size=32, X_val=None, y_val=None, verbose=True):
         """
         Train using FULLY VECTORIZED Mini-Batch Gradient Descent.
         Each batch is processed as a single matrix operation - NO sample loops!
@@ -162,11 +262,8 @@ class NeuralNetwork:
                 # 4. Backward pass for ENTIRE batch at once
                 gradients = self.backward_batch(y_batch)
 
-                # 5. Update parameters
-                for l, layer in enumerate(self.layers):
-                    w_grad, b_grad = gradients[l]
-                    layer.weights -= learning_rate * w_grad
-                    layer.bias -= learning_rate * b_grad
+                # 5. Update parameters using optimizer
+                self.optimizer.update(self.layers, gradients)
 
             # Epoch statistics
             avg_loss = epoch_loss / n_samples
@@ -215,12 +312,14 @@ class NeuralNetwork:
     def save(self, filepath):
         """
         Save complete model state to a .npz file (fast, compressed).
-        Preserves all weights, biases, architecture, and training history.
+        Preserves all weights, biases, architecture, training history, and optimizer state.
         """
         save_dict = {
             'layer_sizes': self.layer_sizes,
             'training_loss': self.training_loss,
             'training_accuracy': self.training_accuracy,
+            'optimizer_name': self.optimizer_name,
+            'optimizer_state': self.optimizer.get_state(),
         }
         
         # Save each layer's weights, biases, and activation
@@ -234,7 +333,7 @@ class NeuralNetwork:
     def load(self, filepath):
         """
         Load complete model state from a .npz file.
-        Restores exact model state - can continue training seamlessly.
+        Restores exact model state including optimizer - can continue training seamlessly.
         """
         data = np.load(filepath, allow_pickle=True)
         
@@ -252,6 +351,17 @@ class NeuralNetwork:
             layer.weights = data[f'layer_{i}_weights']
             layer.bias = data[f'layer_{i}_bias']
             self.layers.append(layer)
+        
+        # Restore optimizer
+        if 'optimizer_name' in data:
+            self.optimizer_name = str(data['optimizer_name'])
+            optimizer_state = data['optimizer_state'].item()
+            
+            # Recreate optimizer with saved state
+            if self.optimizer_name == 'adamw':
+                self.optimizer = AdamW()
+            
+            self.optimizer.set_state(optimizer_state)
 
     @staticmethod
     def load_model(filepath):
@@ -264,8 +374,11 @@ class NeuralNetwork:
         data = np.load(filepath, allow_pickle=True)
         layer_sizes = data['layer_sizes'].tolist()
         
+        # Determine optimizer from saved state
+        optimizer_name = str(data.get('optimizer_name', 'adam'))
+        
         # Create new instance with loaded architecture
-        nn = NeuralNetwork(layer_sizes)
+        nn = NeuralNetwork(layer_sizes, optimizer=optimizer_name)
         
         # Restore training history
         nn.training_loss = data['training_loss'].tolist()
@@ -277,5 +390,10 @@ class NeuralNetwork:
             nn.layers[i].activation = activation
             nn.layers[i].weights = data[f'layer_{i}_weights']
             nn.layers[i].bias = data[f'layer_{i}_bias']
+        
+        # Restore optimizer state
+        if 'optimizer_state' in data:
+            optimizer_state = data['optimizer_state'].item()
+            nn.optimizer.set_state(optimizer_state)
         
         return nn
