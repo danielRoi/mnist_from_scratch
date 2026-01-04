@@ -139,7 +139,7 @@ class Layer:
 class NeuralNetwork:
     """Ultra-fast vectorized neural network with batch processing."""
 
-    def __init__(self, layer_sizes, activations=None, optimizer='adam', learning_rate=0.001, **optimizer_kwargs):
+    def __init__(self, layer_sizes, activations=None, optimizer='adamw', learning_rate=0.001, **optimizer_kwargs):
         self.layer_sizes = layer_sizes
         self.n_layers = len(layer_sizes) - 1
 
